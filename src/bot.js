@@ -1,8 +1,10 @@
 const { col } = require('./db');
 const { tg, sleep } = require('./telegram');
+const { timingSafeEqual } = require('crypto');
 
 const TEXT_LIMIT = 4096;
 const CAPTION_LIMIT = 1024;
+const WEBHOOK_PATH = '/telegram/webhook';
 const ACCOUNT_MESSAGE = [
   'Namaste! 👋',
   '',
@@ -124,12 +126,71 @@ async function handlePost(msg) {
   }
 }
 
-async function startBot() {
+function getBotConfig() {
+  const mode = (process.env.BOT_MODE || 'polling').trim().toLowerCase();
+  if (mode !== 'polling' && mode !== 'webhook') {
+    throw new Error('BOT_MODE must be polling or webhook');
+  }
+  if (mode === 'polling') return { mode };
+
+  const rawUrl = process.env.TELEGRAM_WEBHOOK_URL;
+  const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error('TELEGRAM_WEBHOOK_URL must be an absolute HTTPS URL');
+  }
+  if (
+    url.protocol !== 'https:'
+    || url.pathname !== WEBHOOK_PATH
+    || url.search
+    || url.hash
+    || url.username
+    || url.password
+  ) {
+    throw new Error(`TELEGRAM_WEBHOOK_URL must be HTTPS and end with ${WEBHOOK_PATH}`);
+  }
+  if (!secret || !/^[A-Za-z0-9_-]{1,256}$/.test(secret)) {
+    throw new Error('TELEGRAM_WEBHOOK_SECRET must be 1-256 letters, numbers, underscores, or hyphens');
+  }
+  return { mode, webhookUrl: url.toString(), webhookSecret: secret };
+}
+
+function isValidWebhookSecret(value, expected) {
+  if (typeof value !== 'string' || typeof expected !== 'string') return false;
+  const provided = Buffer.from(value);
+  const configured = Buffer.from(expected);
+  return provided.length === configured.length && timingSafeEqual(provided, configured);
+}
+
+async function handleUpdate(update) {
+  if (update.message) await handleIncomingMessage(update.message);
+  if (update.channel_post) await handlePost(update.channel_post);
+}
+
+async function startBot(config = getBotConfig()) {
+  if (config.mode === 'webhook') {
+    await tg('setWebhook', {
+      url: config.webhookUrl,
+      secret_token: config.webhookSecret,
+      allowed_updates: ['message', 'channel_post'],
+      drop_pending_updates: false,
+    });
+    console.log(`Telegram bot webhook registered at ${new URL(config.webhookUrl).pathname}`);
+    return;
+  }
+
   let offset = 0;
+  let webhookRemoved = false;
   console.log('Telegram bot polling started');
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
+      if (!webhookRemoved) {
+        await tg('deleteWebhook', { drop_pending_updates: false });
+        webhookRemoved = true;
+      }
       const updates = await tg('getUpdates', {
         offset,
         timeout: 30,
@@ -137,12 +198,7 @@ async function startBot() {
       });
       for (const u of updates) {
         offset = u.update_id + 1;
-        if (u.message) {
-          handleIncomingMessage(u.message).catch((e) => console.error('handleIncomingMessage:', e.message));
-        }
-        if (u.channel_post) {
-          handlePost(u.channel_post).catch((e) => console.error('handlePost:', e.message));
-        }
+        handleUpdate(u).catch((e) => console.error('handleUpdate:', e.message));
       }
     } catch (e) {
       console.error('polling error:', e.message);
@@ -151,4 +207,11 @@ async function startBot() {
   }
 }
 
-module.exports = { startBot, handleIncomingMessage };
+module.exports = {
+  WEBHOOK_PATH,
+  getBotConfig,
+  isValidWebhookSecret,
+  startBot,
+  handleIncomingMessage,
+  handleUpdate,
+};
