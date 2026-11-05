@@ -1,23 +1,37 @@
 const { MongoClient, ObjectId } = require('mongodb');
 
 let db;
+let connectionPromise;
 
 async function connect() {
+  if (db) return db;
+  if (connectionPromise) return connectionPromise;
+
   const client = new MongoClient(process.env.MONGODB_URI);
-  await client.connect();
-  db = client.db(process.env.MONGODB_DB || 'tgforward');
-  await db.collection('users').createIndex({ email: 1 }, { unique: true });
-  await db.collection('users').createIndex({ emailVerificationTokenHash: 1 }, { unique: true, sparse: true });
-  await db.collection('users').createIndex({ passwordResetTokenHash: 1 }, { unique: true, sparse: true });
-  await db.collection('channels').createIndex({ userId: 1, chatId: 1, role: 1 }, { unique: true });
-  await db.collection('channels').createIndex({ chatId: 1, role: 1, enabled: 1 });
-  await db.collection('channels').createIndex({ userId: 1, sourceId: 1, role: 1, enabled: 1 });
-  await db.collection('promotions').createIndex({ userId: 1, sourceId: 1, enabled: 1 });
-  await db.collection('logs').createIndex({ userId: 1, createdAt: -1 });
-  // logs 30 din baad auto delete
-  await db.collection('logs').createIndex({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });
-  console.log('MongoDB connected');
-  return db;
+  connectionPromise = (async () => {
+    try {
+      await client.connect();
+      const database = client.db(process.env.MONGODB_DB || 'tgforward');
+      await database.collection('users').createIndex({ email: 1 }, { unique: true });
+      await database.collection('users').createIndex({ emailVerificationTokenHash: 1 }, { unique: true, sparse: true });
+      await database.collection('users').createIndex({ passwordResetTokenHash: 1 }, { unique: true, sparse: true });
+      await database.collection('channels').createIndex({ userId: 1, chatId: 1, role: 1 }, { unique: true });
+      await database.collection('channels').createIndex({ chatId: 1, role: 1, enabled: 1 });
+      await database.collection('channels').createIndex({ userId: 1, sourceId: 1, role: 1, enabled: 1 });
+      await database.collection('promotions').createIndex({ userId: 1, sourceId: 1, enabled: 1 });
+      await database.collection('logs').createIndex({ userId: 1, createdAt: -1 });
+      await database.collection('logs').createIndex({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });
+      db = database;
+      console.log('MongoDB connected');
+      return db;
+    } catch (err) {
+      await client.close().catch(() => {});
+      connectionPromise = null;
+      throw err;
+    }
+  })();
+
+  return connectionPromise;
 }
 
 const col = (name) => db.collection(name);

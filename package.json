@@ -2,9 +2,12 @@
   "name": "tg-forward-web",
   "version": "1.0.0",
   "description": "Telegram post forwarding web app (Node.js + MongoDB + HTML/CSS/JS)",
-  "main": "server.js",
+  "main": "src/app.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "webhook:set": "node scripts/telegram-webhook.js set",
+    "webhook:delete": "node scripts/telegram-webhook.js delete",
+    "webhook:info": "node scripts/telegram-webhook.js info"
   },
   "engines": {
     "node": ">=20"
