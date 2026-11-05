@@ -1,36 +1,92 @@
 <!doctype html>
-<html lang="hi">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Post Forwarder - Login</title>
+  <meta name="description" content="Automatically route Telegram channel posts to the right destinations, add source-specific promotions, and track delivery.">
+  <title>Post Forwarder — Telegram channel automation</title>
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  <div class="auth-wrap">
-    <div class="auth-card">
-      <div class="brand">📣 Post Forwarder</div>
-      <p class="muted">Telegram channels ke posts apne aap forward karo, promotion ke saath.</p>
+  <header class="landing-header">
+    <a class="landing-brand" href="/" aria-label="Post Forwarder home">
+      <span class="landing-brand-mark" aria-hidden="true">➤</span>
+      <span>Post Forwarder</span>
+    </a>
+    <span class="landing-secure"><span aria-hidden="true">●</span> Secure account access</span>
+  </header>
 
-      <div class="tabs">
-        <button id="tab-login" class="active" type="button">Login</button>
-        <button id="tab-register" type="button">Account banao</button>
+  <main class="auth-layout">
+    <section class="project-intro">
+      <span class="intro-eyebrow"><span aria-hidden="true">✦</span> TELEGRAM CHANNEL AUTOMATION</span>
+      <h1>Your channel posts,<br><span>where they need to be.</span></h1>
+      <p class="intro-description">Connect your Telegram channels once. Post Forwarder routes new posts to the right destinations, adds the right promotion, and keeps delivery activity in view.</p>
+
+      <div class="project-features">
+        <article class="project-feature">
+          <span class="feature-icon" aria-hidden="true">⇢</span>
+          <div><strong>Route each source</strong><span>Give every source its own destination channels.</span></div>
+        </article>
+        <article class="project-feature">
+          <span class="feature-icon promo-icon" aria-hidden="true">✧</span>
+          <div><strong>Promote per channel</strong><span>Choose which promotion appears on each source’s posts.</span></div>
+        </article>
+        <article class="project-feature">
+          <span class="feature-icon activity-icon" aria-hidden="true">◷</span>
+          <div><strong>See delivery activity</strong><span>Review successful forwards and troubleshoot failures.</span></div>
+        </article>
       </div>
 
-      <form id="form" novalidate>
+      <div class="project-flow" aria-label="How it works">
+        <div><span>01</span><strong>Connect a source</strong></div>
+        <i aria-hidden="true"></i>
+        <div><span>02</span><strong>Choose destinations</strong></div>
+        <i aria-hidden="true"></i>
+        <div><span>03</span><strong>Posts route automatically</strong></div>
+      </div>
+      <p class="project-requirement">You’ll need a Telegram bot with admin access to the channels you connect.</p>
+    </section>
+
+    <section class="auth-card" aria-labelledby="auth-title">
+      <div class="auth-card-heading">
+        <span class="auth-kicker">YOUR WORKSPACE</span>
+        <h2 id="auth-title">Welcome back</h2>
+        <p id="auth-description">Sign in to manage your forwarding setup.</p>
+      </div>
+
+      <div class="tabs" id="auth-tabs" role="tablist" aria-label="Account options">
+        <button id="tab-login" class="active" type="button" role="tab" aria-selected="true">Log in</button>
+        <button id="tab-register" type="button" role="tab" aria-selected="false">Create account</button>
+      </div>
+
+      <button class="auth-back hidden" id="back-login" type="button">← Back to log in</button>
+      <div id="status" class="auth-status hidden" role="status" aria-live="polite"></div>
+      <div id="error" class="auth-error hidden" role="alert"></div>
+
+      <form id="form">
         <div id="name-wrap" class="hidden">
-          <label for="name">Naam</label>
-          <input id="name" autocomplete="name" maxlength="60">
+          <label for="name">Your name</label>
+          <input id="name" autocomplete="name" maxlength="60" placeholder="How should we address you?">
         </div>
-        <label for="email">Email</label>
-        <input id="email" type="email" autocomplete="email" maxlength="120" required>
-        <label for="password">Password</label>
-        <input id="password" type="password" autocomplete="current-password" minlength="8" maxlength="100" required>
-        <div id="error" class="error" role="alert"></div>
-        <button class="btn" id="submit" type="submit">Login</button>
+        <label for="email">Email address</label>
+        <input id="email" type="email" autocomplete="email" maxlength="120" placeholder="you@example.com" required>
+        <div id="password-wrap">
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" minlength="8" maxlength="100" placeholder="At least 8 characters" required>
+        </div>
+        <button id="forgot-link" class="text-button" type="button">Forgot password?</button>
+        <button class="btn auth-submit" id="submit" type="submit">Log in</button>
       </form>
-    </div>
-  </div>
+
+      <button class="btn ghost auth-resend hidden" id="resend-verification" type="button">Resend verification email</button>
+      <p class="auth-footnote"><span aria-hidden="true">▣</span> Passwords are securely hashed. Email verification protects your account.</p>
+    </section>
+  </main>
+
+  <footer class="landing-footer">
+    <span>Post Forwarder</span>
+    <span>Automate your channel workflow, stay in control.</span>
+  </footer>
 
   <script src="/js/api.js"></script>
   <script src="/js/auth.js"></script>

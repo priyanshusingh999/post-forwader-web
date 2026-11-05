@@ -1,8 +1,10 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const { col, oid } = require('./db');
 const { setSession, clearSession, requireAuth, authLimiter } = require('./auth');
 const { verifyChannel } = require('./telegram');
+const { isMailerConfigured, sendVerificationEmail, sendPasswordResetEmail } = require('./mailer');
 
 const router = express.Router();
 
@@ -12,6 +14,9 @@ const CHAT_RE = /^(@[A-Za-z0-9_]{5,32}|-?\d{5,20})$/;
 const publicUser = (u) => ({ id: u._id, name: u.name, email: u.email, settings: u.settings });
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+const createToken = () => crypto.randomBytes(32).toString('hex');
+const mailUnavailable = (res) => bad(res, 'Email service is not configured. Ask the administrator to configure SMTP.', 503);
 
 /* ---------- AUTH ---------- */
 router.post('/auth/register', authLimiter, async (req, res) => {
@@ -21,21 +26,36 @@ router.post('/auth/register', authLimiter, async (req, res) => {
   if (!name) return bad(res, 'Naam daalo');
   if (!EMAIL_RE.test(email)) return bad(res, 'Valid email daalo');
   if (password.length < 8 || password.length > 100) return bad(res, 'Password 8 se 100 characters ka hona chahiye');
+  if (!isMailerConfigured()) return mailUnavailable(res);
+
+  const verificationToken = createToken();
+  const doc = {
+    name,
+    email,
+    passwordHash: await bcrypt.hash(password, 12),
+    emailVerified: false,
+    emailVerificationTokenHash: hashToken(verificationToken),
+    emailVerificationExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    settings: { forwardingEnabled: true, promotionEnabled: true, keepForwardTag: false },
+    createdAt: new Date(),
+  };
+  let userId;
   try {
-    const doc = {
-      name,
-      email,
-      passwordHash: await bcrypt.hash(password, 12),
-      settings: { forwardingEnabled: true, promotionEnabled: true, keepForwardTag: false },
-      createdAt: new Date(),
-    };
     const r = await col('users').insertOne(doc);
-    setSession(res, r.insertedId);
-    res.json({ user: publicUser({ ...doc, _id: r.insertedId }) });
+    userId = r.insertedId;
   } catch (e) {
     if (e.code === 11000) return bad(res, 'Is email se account pehle se hai', 409);
     throw e;
   }
+
+  try {
+    await sendVerificationEmail(email, verificationToken);
+  } catch (e) {
+    console.error('verification email failed:', e.message);
+    await col('users').deleteOne({ _id: userId, emailVerified: false });
+    return bad(res, 'Verification email could not be sent. Check SMTP settings and try again.', 503);
+  }
+  res.status(202).json({ message: 'Account created. Check your email to verify the address before logging in.' });
 });
 
 router.post('/auth/login', authLimiter, async (req, res) => {
@@ -44,8 +64,109 @@ router.post('/auth/login', authLimiter, async (req, res) => {
   const user = await col('users').findOne({ email });
   const ok = user && (await bcrypt.compare(password, user.passwordHash));
   if (!ok) return bad(res, 'Email ya password galat hai', 401);
+  if (user.emailVerified === false) {
+    return res.status(403).json({
+      error: 'Login se pehle apna email verify karein.',
+      emailVerificationRequired: true,
+    });
+  }
   setSession(res, user._id);
   res.json({ user: publicUser(user) });
+});
+
+router.post('/auth/verify-email', authLimiter, async (req, res) => {
+  const token = str(req.body.token, 128);
+  if (!token) return bad(res, 'Verification link invalid ya expire ho gaya hai', 400);
+  const result = await col('users').updateOne(
+    { emailVerificationTokenHash: hashToken(token), emailVerificationExpiresAt: { $gt: new Date() } },
+    {
+      $set: { emailVerified: true },
+      $unset: { emailVerificationTokenHash: '', emailVerificationExpiresAt: '' },
+    },
+  );
+  if (!result.matchedCount) return bad(res, 'Verification link invalid ya expire ho gaya hai', 400);
+  res.json({ message: 'Email verified. You can now log in.' });
+});
+
+router.post('/auth/resend-verification', authLimiter, async (req, res) => {
+  if (!isMailerConfigured()) return mailUnavailable(res);
+  const email = str(req.body.email, 120).toLowerCase();
+  if (EMAIL_RE.test(email)) {
+    const user = await col('users').findOne({ email, emailVerified: false });
+    if (user) {
+      const token = createToken();
+      await col('users').updateOne(
+        { _id: user._id, emailVerified: false },
+        {
+          $set: {
+            emailVerificationTokenHash: hashToken(token),
+            emailVerificationExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          },
+        },
+      );
+      try {
+        await sendVerificationEmail(email, token);
+      } catch (e) {
+        console.error('verification email resend failed:', e.message);
+      }
+    }
+  }
+  res.json({ message: 'If this address has an unverified account, a verification email will be sent.' });
+});
+
+router.post('/auth/forgot-password', authLimiter, async (req, res) => {
+  if (!isMailerConfigured()) return mailUnavailable(res);
+  const email = str(req.body.email, 120).toLowerCase();
+  if (EMAIL_RE.test(email)) {
+    const user = await col('users').findOne({ email, emailVerified: { $ne: false } });
+    if (user) {
+      const token = createToken();
+      await col('users').updateOne(
+        { _id: user._id },
+        {
+          $set: {
+            passwordResetTokenHash: hashToken(token),
+            passwordResetExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+          },
+        },
+      );
+      try {
+        await sendPasswordResetEmail(email, token);
+      } catch (e) {
+        console.error('password reset email failed:', e.message);
+        await col('users').updateOne(
+          { _id: user._id, passwordResetTokenHash: hashToken(token) },
+          { $unset: { passwordResetTokenHash: '', passwordResetExpiresAt: '' } },
+        );
+      }
+    }
+  }
+  res.json({ message: 'If an account exists for this address, password reset instructions will be sent.' });
+});
+
+router.post('/auth/reset-password', authLimiter, async (req, res) => {
+  const token = str(req.body.token, 128);
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+  if (password.length < 8 || password.length > 100) {
+    return bad(res, 'Password 8 se 100 characters ka hona chahiye');
+  }
+  if (!token) return bad(res, 'Reset link invalid ya expire ho gaya hai', 400);
+  const tokenHash = hashToken(token);
+  const user = await col('users').findOne({
+    passwordResetTokenHash: tokenHash,
+    passwordResetExpiresAt: { $gt: new Date() },
+  });
+  if (!user) return bad(res, 'Reset link invalid ya expire ho gaya hai', 400);
+  const passwordHash = await bcrypt.hash(password, 12);
+  const result = await col('users').updateOne(
+    { _id: user._id, passwordResetTokenHash: tokenHash, passwordResetExpiresAt: { $gt: new Date() } },
+    {
+      $set: { passwordHash },
+      $unset: { passwordResetTokenHash: '', passwordResetExpiresAt: '' },
+    },
+  );
+  if (!result.matchedCount) return bad(res, 'Reset link invalid ya expire ho gaya hai', 400);
+  res.json({ message: 'Password reset ho gaya. Ab naye password se login karein.' });
 });
 
 router.post('/auth/logout', (req, res) => {

@@ -7,6 +7,8 @@ async function connect() {
   await client.connect();
   db = client.db(process.env.MONGODB_DB || 'tgforward');
   await db.collection('users').createIndex({ email: 1 }, { unique: true });
+  await db.collection('users').createIndex({ emailVerificationTokenHash: 1 }, { unique: true, sparse: true });
+  await db.collection('users').createIndex({ passwordResetTokenHash: 1 }, { unique: true, sparse: true });
   await db.collection('channels').createIndex({ userId: 1, chatId: 1, role: 1 }, { unique: true });
   await db.collection('channels').createIndex({ chatId: 1, role: 1, enabled: 1 });
   await db.collection('channels').createIndex({ userId: 1, sourceId: 1, role: 1, enabled: 1 });

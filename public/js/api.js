@@ -9,6 +9,7 @@ async function api(path, { method = 'GET', body } = {}) {
   if (!res.ok) {
     const err = new Error(data.error || 'Kuch galat ho gaya');
     err.status = res.status;
+    err.data = data;
     throw err;
   }
   return data;
