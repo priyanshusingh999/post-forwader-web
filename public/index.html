@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Post Forwarder - Login</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="brand">📣 Post Forwarder</div>
+      <p class="muted">Telegram channels ke posts apne aap forward karo, promotion ke saath.</p>
+
+      <div class="tabs">
+        <button id="tab-login" class="active" type="button">Login</button>
+        <button id="tab-register" type="button">Account banao</button>
+      </div>
+
+      <form id="form" novalidate>
+        <div id="name-wrap" class="hidden">
+          <label for="name">Naam</label>
+          <input id="name" autocomplete="name" maxlength="60">
+        </div>
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="email" maxlength="120" required>
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" minlength="8" maxlength="100" required>
+        <div id="error" class="error" role="alert"></div>
+        <button class="btn" id="submit" type="submit">Login</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/auth.js"></script>
+</body>
+</html>
