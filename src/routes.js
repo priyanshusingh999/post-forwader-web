@@ -11,7 +11,17 @@ const router = express.Router();
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const CHAT_RE = /^(@[A-Za-z0-9_]{5,32}|-?\d{5,20})$/;
 
-const publicUser = (u) => ({ id: u._id, name: u.name, email: u.email, settings: u.settings });
+const adminEmails = () => new Set(
+  (process.env.ADMIN_EMAILS || '').split(',').map((email) => email.trim().toLowerCase()).filter(Boolean),
+);
+const isAdmin = (user) => user.emailVerified !== false && adminEmails().has(String(user.email).toLowerCase());
+const publicUser = (u) => ({
+  id: u._id,
+  name: u.name,
+  email: u.email,
+  settings: u.settings,
+  isAdmin: isAdmin(u),
+});
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
@@ -176,6 +186,11 @@ router.post('/auth/logout', (req, res) => {
 
 router.use(requireAuth);
 
+function requireAdmin(req, res, next) {
+  if (!isAdmin(req.user)) return bad(res, 'Admin access required', 403);
+  next();
+}
+
 router.get('/me', (req, res) => res.json({ user: publicUser(req.user) }));
 
 router.patch('/me/settings', async (req, res) => {
@@ -195,6 +210,154 @@ router.post('/me/password', authLimiter, async (req, res) => {
     return bad(res, 'Naya password 8 se 100 characters ka ho');
   if (!(await bcrypt.compare(String(oldPassword || ''), req.user.passwordHash))) return bad(res, 'Purana password galat hai', 401);
   await col('users').updateOne({ _id: req.user._id }, { $set: { passwordHash: await bcrypt.hash(newPassword, 12) } });
+  res.json({ ok: true });
+});
+
+/* ---------- ADMIN ---------- */
+router.get('/admin/summary', requireAdmin, async (req, res) => {
+  const now = new Date();
+  const since24 = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const since30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const [totalUsers, newUsers30d, logTotals, blockedSources, pendingReports] = await Promise.all([
+    col('users').countDocuments(),
+    col('users').countDocuments({ createdAt: { $gte: since30 } }),
+    col('logs').aggregate([
+      { $match: { createdAt: { $gte: since30 } } },
+      {
+        $group: {
+          _id: null,
+          sent30d: { $sum: { $cond: [{ $eq: ['$status', 'sent'] }, 1, 0] } },
+          failed30d: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
+          sent24h: { $sum: { $cond: [{ $and: [{ $eq: ['$status', 'sent'] }, { $gte: ['$createdAt', since24] }] }, 1, 0] } },
+          failed24h: { $sum: { $cond: [{ $and: [{ $eq: ['$status', 'failed'] }, { $gte: ['$createdAt', since24] }] }, 1, 0] } },
+        },
+      },
+    ]).toArray(),
+    col('sourceBlocklist').countDocuments(),
+    col('channelReports').countDocuments({ status: 'pending' }),
+  ]);
+  res.json({
+    totalUsers,
+    newUsers30d,
+    sent30d: logTotals[0]?.sent30d || 0,
+    failed30d: logTotals[0]?.failed30d || 0,
+    sent24h: logTotals[0]?.sent24h || 0,
+    failed24h: logTotals[0]?.failed24h || 0,
+    blockedSources,
+    pendingReports,
+    revenue: { available: false, amount: null, reason: 'No billing or payment provider is configured.' },
+    usageWindowDays: 30,
+    riskRules: { highVolumeSent24h: 1000, minimumAttempts24h: 20, highFailureRate: 0.25 },
+  });
+});
+
+router.get('/admin/users', requireAdmin, async (req, res) => {
+  const since24 = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const users = await col('logs').aggregate([
+      { $match: { createdAt: { $gte: since24 }, status: { $in: ['sent', 'failed'] } } },
+      {
+        $group: {
+          _id: '$userId',
+          sent24h: { $sum: { $cond: [{ $eq: ['$status', 'sent'] }, 1, 0] } },
+          failed24h: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
+        },
+      },
+      { $addFields: { attempts24h: { $add: ['$sent24h', '$failed24h'] } } },
+      { $sort: { attempts24h: -1 } },
+      { $limit: 50 },
+      { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'account' } },
+      { $unwind: '$account' },
+      {
+        $project: {
+          _id: 0,
+          id: '$account._id',
+          name: '$account.name',
+          email: '$account.email',
+          createdAt: '$account.createdAt',
+          emailVerified: { $ne: ['$account.emailVerified', false] },
+          sent24h: 1,
+          failed24h: 1,
+        },
+      },
+    ]).toArray();
+  res.json({
+    users: users.map((user) => {
+      const attempts24h = user.sent24h + user.failed24h;
+      const failureRate24h = attempts24h ? user.failed24h / attempts24h : 0;
+      const riskSignals = [];
+      if (user.sent24h >= 1000) riskSignals.push('High forwarding volume in 24h');
+      if (attempts24h >= 20 && failureRate24h >= 0.25) riskSignals.push('High delivery failure rate');
+      return {
+        emailVerified: user.emailVerified !== false,
+        ...user,
+        failureRate24h,
+        riskSignals,
+      };
+    }),
+  });
+});
+
+router.get('/admin/reports', requireAdmin, async (req, res) => {
+  const status = ['pending', 'blocked', 'dismissed'].includes(req.query.status) ? req.query.status : 'pending';
+  const reports = await col('channelReports').find({ status }).sort({ createdAt: -1 }).limit(100).toArray();
+  res.json({ reports });
+});
+
+router.post('/admin/reports/:id/block', requireAdmin, async (req, res) => {
+  const _id = oid(req.params.id);
+  const report = _id && await col('channelReports').findOne({ _id, status: 'pending' });
+  if (!report) return bad(res, 'Pending report nahi mila', 404);
+  const now = new Date();
+  try {
+    await col('sourceBlocklist').updateOne(
+      { chatId: report.chatId },
+      {
+        $setOnInsert: {
+          chatId: report.chatId,
+          title: report.title,
+          username: report.username || null,
+          reason: report.reason,
+          blockedAt: now,
+          blockedBy: req.user._id,
+          reportId: report._id,
+        },
+      },
+      { upsert: true },
+    );
+  } catch (err) {
+    if (err.code !== 11000) throw err;
+  }
+  await col('channels').updateMany(
+    { chatId: report.chatId, role: 'source' },
+    { $set: { enabled: false } },
+  );
+  await col('channelReports').updateOne(
+    { _id: report._id, status: 'pending' },
+    { $set: { status: 'blocked', reviewedAt: now, reviewedBy: req.user._id } },
+  );
+  res.json({ ok: true });
+});
+
+router.post('/admin/reports/:id/dismiss', requireAdmin, async (req, res) => {
+  const _id = oid(req.params.id);
+  const result = _id && await col('channelReports').updateOne(
+    { _id, status: 'pending' },
+    { $set: { status: 'dismissed', reviewedAt: new Date(), reviewedBy: req.user._id } },
+  );
+  if (!result || !result.matchedCount) return bad(res, 'Pending report nahi mila', 404);
+  res.json({ ok: true });
+});
+
+router.get('/admin/blocklist', requireAdmin, async (req, res) => {
+  const channels = await col('sourceBlocklist').find({}).sort({ blockedAt: -1 }).limit(100).toArray();
+  res.json({ channels });
+});
+
+router.delete('/admin/blocklist/:chatId', requireAdmin, async (req, res) => {
+  const chatId = str(req.params.chatId, 20);
+  if (!/^-?\d{5,20}$/.test(chatId)) return bad(res, 'Invalid Telegram channel ID');
+  const result = await col('sourceBlocklist').deleteOne({ chatId });
+  if (!result.deletedCount) return bad(res, 'Blocked source nahi mila', 404);
   res.json({ ok: true });
 });
 
@@ -221,6 +384,9 @@ router.post('/channels', async (req, res) => {
     info = await verifyChannel(input, role === 'destination');
   } catch (e) {
     return bad(res, `Channel verify nahi hua: ${e.message}`);
+  }
+  if (role === 'source' && await col('sourceBlocklist').findOne({ chatId: info.chatId }, { projection: { _id: 1 } })) {
+    return bad(res, 'Ye source channel system-wide block kiya gaya hai', 403);
   }
   const doc = {
     userId: req.user._id,
@@ -275,6 +441,12 @@ router.put('/channels/:id', async (req, res) => {
       return bad(res, `Channel verify nahi hua: ${e.message}`);
     }
   }
+  const targetChatId = set.chatId || existing.chatId;
+  const willEnable = typeof req.body.enabled === 'boolean' ? req.body.enabled : existing.enabled;
+  if (newRole === 'source' && (willEnable || newRole !== existing.role)) {
+    const blocked = await col('sourceBlocklist').findOne({ chatId: targetChatId }, { projection: { _id: 1 } });
+    if (blocked) return bad(res, 'Ye source channel system-wide block kiya gaya hai', 403);
+  }
   try {
     await col('channels').updateOne({ _id }, { $set: set });
   } catch (e) {
@@ -301,6 +473,30 @@ router.delete('/channels/:id', async (req, res) => {
   const r = await col('channels').deleteOne({ _id, userId: req.user._id });
   if (!r || !r.deletedCount) return bad(res, 'Channel nahi mila', 404);
   res.json({ ok: true });
+});
+
+router.post('/channels/:id/report', async (req, res) => {
+  const _id = oid(req.params.id);
+  const channel = _id && await col('channels').findOne({ _id, userId: req.user._id, role: 'source' });
+  if (!channel) return bad(res, 'Source channel nahi mila', 404);
+  const pending = await col('channelReports').findOne({
+    chatId: channel.chatId,
+    reporterUserId: req.user._id,
+    status: 'pending',
+  });
+  if (pending) return bad(res, 'Aapki report pehle se review ke liye pending hai', 409);
+  const report = {
+    chatId: channel.chatId,
+    title: channel.title,
+    username: channel.username || null,
+    reporterUserId: req.user._id,
+    reporterEmail: req.user.email,
+    reason: str(req.body.reason, 500),
+    status: 'pending',
+    createdAt: new Date(),
+  };
+  await col('channelReports').insertOne(report);
+  res.status(201).json({ message: 'Report admin review ke liye bhej di gayi hai.' });
 });
 
 /* ---------- PROMOTIONS ---------- */

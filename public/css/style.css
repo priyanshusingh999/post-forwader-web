@@ -335,6 +335,7 @@ label { display: block; margin: .85rem 0 .3rem; font-size: .88rem; font-weight: 
 .row .info { min-width: 0; flex: 1 1 220px; overflow-wrap: anywhere; }
 .row .info strong { font-weight: 680; }
 .row .actions { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.admin-usage { display: flex; align-items: center; justify-content: flex-end; gap: .4rem; flex-wrap: wrap; }
 .badge { display: inline-flex; align-items: center; min-height: 23px; padding: .12rem .55rem; border-radius: 999px; background: var(--bg); color: var(--muted); font-size: .72rem; font-weight: 700; }
 .badge.ok { background: rgba(22,135,90,.12); color: var(--ok); }
 .badge.fail { background: rgba(207,65,75,.12); color: var(--danger); }

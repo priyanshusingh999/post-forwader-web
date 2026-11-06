@@ -18,6 +18,10 @@ async function connect() {
       await database.collection('channels').createIndex({ userId: 1, chatId: 1, role: 1 }, { unique: true });
       await database.collection('channels').createIndex({ chatId: 1, role: 1, enabled: 1 });
       await database.collection('channels').createIndex({ userId: 1, sourceId: 1, role: 1, enabled: 1 });
+      await database.collection('sourceBlocklist').createIndex({ chatId: 1 }, { unique: true });
+      await database.collection('channelReports').createIndex({ status: 1, createdAt: -1 });
+      await database.collection('channelReports').createIndex({ chatId: 1, createdAt: -1 });
+      await database.collection('channelReports').createIndex({ chatId: 1, reporterUserId: 1, status: 1 });
       await database.collection('promotions').createIndex({ userId: 1, sourceId: 1, enabled: 1 });
       await database.collection('logs').createIndex({ userId: 1, createdAt: -1 });
       await database.collection('logs').createIndex({ createdAt: 1 }, { expireAfterSeconds: 60 * 60 * 24 * 30 });

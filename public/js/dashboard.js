@@ -152,6 +152,16 @@ async function renderChannels() {
         },
       ),
     }, 'Edit'),
+    channel.role === 'source' && el('button', {
+      class: 'btn ghost small',
+      type: 'button',
+      onclick: () => openDialog('Report source channel', [
+        { name: 'reason', label: 'Why are you reporting this source?', type: 'textarea', max: 500, hint: 'An admin will review the report. It will not be blocked automatically.' },
+      ], async (values) => {
+        await api(`/channels/${channel._id}/report`, { method: 'POST', body: values });
+        toast('Report sent for admin review');
+      }, 'Submit report'),
+    }, 'Report'),
     el('button', {
       class: 'btn danger small',
       type: 'button',
@@ -367,6 +377,79 @@ async function renderLogs() {
     el('button', { class: 'btn ghost small', type: 'button', onclick: render }, 'Refresh')), list));
 }
 
+async function renderAdmin() {
+  const [summary, userData, reportData, blocklistData] = await Promise.all([
+    api('/admin/summary'),
+    api('/admin/users'),
+    api('/admin/reports?status=pending'),
+    api('/admin/blocklist'),
+  ]);
+  const stat = (label, value, note, icon) => el('div', { class: 'stat' },
+    el('div', { class: 'stat-label' }, label, el('span', { class: 'stat-icon', 'aria-hidden': 'true' }, icon)),
+    el('b', {}, value),
+    el('span', { class: 'muted' }, note));
+  const userRows = userData.users.length
+    ? userData.users.map((account) => el('div', { class: 'row' },
+      el('div', { class: 'info' },
+        el('strong', {}, account.name),
+        el('div', { class: 'muted' }, account.email),
+        el('div', { class: 'muted' }, `Joined ${fmtDate(account.createdAt)} · ${account.emailVerified ? 'Verified' : 'Unverified'}`)),
+      el('div', { class: 'admin-usage' },
+        el('span', { class: 'badge' }, `${account.sent24h} sent / 24h`),
+        el('span', { class: `badge${account.failed24h ? ' fail' : ''}` }, `${account.failed24h} failed / 24h`),
+        ...account.riskSignals.map((signal) => el('span', { class: 'badge fail' }, signal))))
+    )
+    : el('div', { class: 'empty' }, 'No registered users yet.');
+  const reportRows = reportData.reports.length
+    ? reportData.reports.map((report) => el('div', { class: 'row' },
+      el('div', { class: 'info' },
+        el('strong', {}, report.title || report.chatId),
+        el('div', { class: 'muted' }, `${report.username ? `@${report.username} · ` : ''}${report.chatId}`),
+        el('div', { class: 'muted' }, `Reported by ${report.reporterEmail} · ${fmtDate(report.createdAt)}`),
+        el('div', {}, report.reason || 'No details provided')),
+      el('div', { class: 'actions' },
+        el('button', { class: 'btn danger small', type: 'button', onclick: () => guard(async () => {
+          if (!confirm('Block this source system-wide? Existing source routes will be paused.')) return;
+          await api(`/admin/reports/${report._id}/block`, { method: 'POST' });
+          toast('Source blocked system-wide');
+          await guard(renderAdmin);
+        }) }, 'Block source'),
+        el('button', { class: 'btn ghost small', type: 'button', onclick: () => guard(async () => {
+          await api(`/admin/reports/${report._id}/dismiss`, { method: 'POST' });
+          toast('Report dismissed');
+          await guard(renderAdmin);
+        }) }, 'Dismiss')))
+    )
+    : el('div', { class: 'empty' }, 'No pending source reports.');
+  const blockedRows = blocklistData.channels.length
+    ? blocklistData.channels.map((channel) => el('div', { class: 'row' },
+      el('div', { class: 'info' },
+        el('strong', {}, channel.title || channel.chatId),
+        el('div', { class: 'muted' }, `${channel.username ? `@${channel.username} · ` : ''}${channel.chatId} · Blocked ${fmtDate(channel.blockedAt)}`),
+        el('div', {}, channel.reason || 'No report details provided')),
+      el('button', { class: 'btn ghost small', type: 'button', onclick: () => guard(async () => {
+        if (!confirm('Unblock this source? Existing channel routes will remain paused.')) return;
+        await api(`/admin/blocklist/${encodeURIComponent(channel.chatId)}`, { method: 'DELETE' });
+        toast('Source unblocked; owners may enable it again');
+        await guard(renderAdmin);
+      }) }, 'Unblock'))
+    )
+    : el('div', { class: 'empty' }, 'No blocked sources.');
+  view.replaceChildren(
+    el('div', { class: 'stats' },
+      stat('Registered users', summary.totalUsers, `${summary.newUsers30d} joined in 30 days`, '♙'),
+      stat('Successful forwards (30d)', summary.sent30d, `${summary.sent24h} in the last 24 hours`, '↗'),
+      stat('Revenue', 'Not configured', 'Connect billing to track revenue', '$'),
+      stat('Moderation queue', summary.pendingReports, `${summary.blockedSources} sources blocked`, '⚑')),
+    el('section', { class: 'card' },
+      el('div', { class: 'head' }, el('h2', {}, 'Most active users (24h) and risk signals'),
+        el('button', { class: 'btn ghost small', type: 'button', onclick: () => guard(renderAdmin) }, 'Refresh')),
+      el('p', { class: 'muted' }, `Recent delivery records are retained for ${summary.usageWindowDays} days. A risk signal is only a review hint, not proof of abuse or an automatic suspension. High-volume signal: ${summary.riskRules.highVolumeSent24h}+ successes/24h. High-failure signal: at least ${summary.riskRules.minimumAttempts24h} attempts and ${Math.round(summary.riskRules.highFailureRate * 100)}% failures.`),
+      userRows),
+    el('section', { class: 'card' }, el('div', { class: 'head' }, el('h2', {}, 'Pending source reports'), el('span', { class: 'badge' }, reportData.reports.length)), reportRows),
+    el('section', { class: 'card' }, el('div', { class: 'head' }, el('h2', {}, 'System-wide source blocklist'), el('span', { class: 'badge' }, blocklistData.channels.length)), blockedRows));
+}
+
 function renderSettings() {
   const s = user.settings;
   const sw = (key, title, desc) =>
@@ -391,6 +474,7 @@ const pageDetails = {
   promotions: ['Promotions', 'Create and manage promotional text added to forwarded posts.', 'Promotions', 'Manage your post promotions'],
   logs: ['Activity logs', 'Review recent delivery results and troubleshoot failed posts.', 'Activity logs', 'Recent forwarding activity'],
   settings: ['Settings', 'Control forwarding behavior and manage your account.', 'Settings', 'Preferences and account security'],
+  admin: ['Admin dashboard', 'Review user activity, usage signals, reports, and blocked sources.', 'Administration', 'Platform overview and moderation'],
 };
 
 function selectTab(nextTab) {
@@ -412,6 +496,7 @@ async function render() {
     else if (tab === 'channels') await renderChannels();
     else if (tab === 'promotions') await renderPromotions();
     else if (tab === 'logs') await renderLogs();
+    else if (tab === 'admin' && user.isAdmin) await renderAdmin();
     else renderSettings();
   });
 }
@@ -425,6 +510,7 @@ async function render() {
   }
   document.getElementById('who').textContent = user.name;
   document.getElementById('user-avatar').textContent = user.name.trim().charAt(0).toUpperCase();
+  document.querySelector('#nav [data-tab="admin"]').classList.toggle('hidden', !user.isAdmin);
   document.getElementById('nav').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-tab]');
     if (!b) return;

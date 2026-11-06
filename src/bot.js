@@ -86,6 +86,8 @@ async function deliver(msg, destChatId, user, promoText) {
 
 async function handlePost(msg) {
   const sourceId = String(msg.chat.id);
+  const blocked = await col('sourceBlocklist').findOne({ chatId: sourceId }, { projection: { _id: 1 } });
+  if (blocked) return;
   const sources = await col('channels').find({ chatId: sourceId, role: 'source', enabled: true }).toArray();
 
   for (const source of sources) {
