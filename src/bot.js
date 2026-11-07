@@ -54,30 +54,34 @@ async function log(userId, doc) {
 }
 
 // Ek post ko ek destination par bhejo (promotion ke saath ya bina)
-async function deliver(msg, destChatId, user, promoText) {
+async function deliver(msg, destChatId, user, promoText, sourceSettings) {
   const chatId = msg.chat.id;
 
-  if (user.settings.keepForwardTag && !promoText) {
+  if (sourceSettings.keepForwardTag && !promoText) {
     return tg('forwardMessage', { chat_id: destChatId, from_chat_id: chatId, message_id: msg.message_id });
   }
 
   if (promoText && msg.text) {
-    const full = `${msg.text}\n\n${promoText}`;
-    if (full.length <= TEXT_LIMIT) {
+    const text = `${msg.text}\n\n${promoText}`;
+    if (text.length <= TEXT_LIMIT) {
       return tg('sendMessage', {
         chat_id: destChatId,
-        text: full,
-        entities: msg.entities, // append hone se offsets same rehte hain
+        text,
+        entities: msg.entities,
         link_preview_options: { is_disabled: false },
       });
     }
   }
 
   const params = { chat_id: destChatId, from_chat_id: chatId, message_id: msg.message_id };
-  if (promoText && !msg.text && (msg.photo || msg.video || msg.document || msg.audio || msg.animation || msg.voice)) {
-    const full = `${msg.caption || ''}\n\n${promoText}`.trim();
-    if (full.length <= CAPTION_LIMIT) {
-      params.caption = full;
+  if (
+    promoText
+    && !msg.text
+    && (msg.photo || msg.video || msg.document || msg.audio || msg.animation || msg.voice)
+  ) {
+    const caption = `${msg.caption || ''}\n\n${promoText}`.trim();
+    if (caption.length <= CAPTION_LIMIT) {
+      params.caption = caption;
       if (msg.caption_entities) params.caption_entities = msg.caption_entities;
     }
   }
@@ -92,7 +96,13 @@ async function handlePost(msg) {
 
   for (const source of sources) {
     const user = await col('users').findOne({ _id: source.userId });
-    if (!user || !user.settings.forwardingEnabled) continue;
+    if (!user) continue;
+    const sourceSettings = {
+      forwardingEnabled: source.settings?.forwardingEnabled ?? user.settings?.forwardingEnabled ?? true,
+      promotionEnabled: source.settings?.promotionEnabled ?? user.settings?.promotionEnabled ?? true,
+      keepForwardTag: source.settings?.keepForwardTag ?? user.settings?.keepForwardTag ?? false,
+    };
+    if (!sourceSettings.forwardingEnabled) continue;
 
     const destinations = await col('channels')
       .find({ userId: user._id, sourceId: source._id, role: 'destination', enabled: true })
@@ -100,7 +110,7 @@ async function handlePost(msg) {
     if (!destinations.length) continue;
 
     let promoText = '';
-    if (user.settings.promotionEnabled) {
+    if (sourceSettings.promotionEnabled) {
       const promos = await col('promotions').find({
         userId: user._id,
         enabled: true,
@@ -118,7 +128,7 @@ async function handlePost(msg) {
         promoted: Boolean(promoText),
       };
       try {
-        await deliver(msg, dest.chatId, user, promoText);
+        await deliver(msg, dest.chatId, user, promoText, sourceSettings);
         await log(user._id, { ...base, status: 'sent' });
       } catch (e) {
         await log(user._id, { ...base, status: 'failed', error: String(e.message).slice(0, 200) });
@@ -216,4 +226,5 @@ module.exports = {
   startBot,
   handleIncomingMessage,
   handleUpdate,
+  deliver,
 };

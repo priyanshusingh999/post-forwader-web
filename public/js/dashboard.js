@@ -177,6 +177,32 @@ async function renderChannels() {
       el('strong', {}, channel.label || channel.title),
       el('span', {}, channel.username ? `@${channel.username}` : channel.chatId)),
     renderChannelActions(channel));
+  const renderSourceSettings = (source) => {
+    const settings = {
+      forwardingEnabled: source.settings?.forwardingEnabled ?? user.settings?.forwardingEnabled ?? true,
+      promotionEnabled: source.settings?.promotionEnabled ?? user.settings?.promotionEnabled ?? true,
+      keepForwardTag: source.settings?.keepForwardTag ?? user.settings?.keepForwardTag ?? false,
+    };
+    const options = [
+      ['forwardingEnabled', 'Forward posts'],
+      ['promotionEnabled', 'Add promotion'],
+      ['keepForwardTag', 'Keep forwarded-from tag'],
+    ];
+    return el('div', { class: 'source-settings' },
+      el('strong', { class: 'source-settings-title' }, 'Forwarding settings'),
+      el('div', { class: 'source-settings-options' }, options.map(([key, label]) =>
+        el('label', { class: 'source-setting' },
+          toggle(settings[key], (enabled) => guard(async () => {
+            const result = await api(`/channels/${source._id}/settings`, {
+              method: 'PATCH',
+              body: { [key]: enabled },
+            });
+            source.settings = result.channel.settings;
+            toast(`${label} ${enabled ? 'enabled' : 'disabled'} for this source`);
+            renderChannels();
+          })),
+          el('span', {}, label)))));
+  };
   const sourceCards = sources.map((source) => {
     const linkedDestinations = destinations.filter((destination) => destination.sourceId === source._id);
     return el('article', { class: 'route-card' },
@@ -189,7 +215,8 @@ async function renderChannels() {
           el('div', { class: 'channel-details' },
             el('strong', {}, source.label || source.title),
             el('span', {}, source.username ? `@${source.username}` : source.chatId)),
-          renderChannelActions(source))),
+          renderChannelActions(source)),
+        renderSourceSettings(source)),
       el('div', { class: 'route-connector', 'aria-hidden': 'true' }, '→'),
       el('section', { class: 'route-destinations' },
         el('div', { class: 'route-column-heading' },
@@ -451,16 +478,9 @@ async function renderAdmin() {
 }
 
 function renderSettings() {
-  const s = user.settings;
-  const sw = (key, title, desc) =>
-    el('label', { class: 'switch' },
-      toggle(s[key], (v) => guard(async () => { const r = await api('/me/settings', { method: 'PATCH', body: { [key]: v } }); user = r.user; toast('Saved'); })),
-      el('span', {}, el('strong', {}, title), el('div', { class: 'muted' }, desc)));
   view.replaceChildren(
-    el('div', { class: 'card' }, el('h2', {}, 'Forwarding settings'),
-      sw('forwardingEnabled', 'Forwarding on', 'Band karne par koi post forward nahi hogi.'),
-      sw('promotionEnabled', 'Promotion lagao', 'Forwarded post ke neeche promotion text judega.'),
-      sw('keepForwardTag', '"Forwarded from" tag rakho', 'On = original forward tag dikhega (promotion is mode me nahi judta). Off = clean copy.')),
+    el('div', { class: 'card' }, el('h2', {}, 'Per-source forwarding'),
+      el('p', { class: 'muted' }, 'Forwarding, promotion, and forwarded-from options are configured separately on each source in the Channels tab.')),
     el('div', { class: 'card' }, el('h2', {}, 'Password badlo'),
       el('button', { class: 'btn ghost', type: 'button', onclick: () => openDialog('Password badlo', [
         { name: 'oldPassword', label: 'Purana password', type: 'password', max: 100 },
@@ -473,7 +493,7 @@ const pageDetails = {
   channels: ['Channels', 'Connect source channels and choose where each one forwards posts.', 'Channels', 'Manage your source and destination channels'],
   promotions: ['Promotions', 'Create and manage promotional text added to forwarded posts.', 'Promotions', 'Manage your post promotions'],
   logs: ['Activity logs', 'Review recent delivery results and troubleshoot failed posts.', 'Activity logs', 'Recent forwarding activity'],
-  settings: ['Settings', 'Control forwarding behavior and manage your account.', 'Settings', 'Preferences and account security'],
+  settings: ['Settings', 'Manage your account; forwarding options are set separately for each source.', 'Settings', 'Preferences and account security'],
   admin: ['Admin dashboard', 'Review user activity, usage signals, reports, and blocked sources.', 'Administration', 'Platform overview and moderation'],
 };
 

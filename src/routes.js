@@ -398,6 +398,13 @@ router.post('/channels', async (req, res) => {
     enabled: true,
     createdAt: new Date(),
   };
+  if (role === 'source') {
+    doc.settings = {
+      forwardingEnabled: req.user.settings?.forwardingEnabled ?? true,
+      promotionEnabled: req.user.settings?.promotionEnabled ?? true,
+      keepForwardTag: req.user.settings?.keepForwardTag ?? false,
+    };
+  }
   if (sourceId) doc.sourceId = sourceId;
   try {
     const r = await col('channels').insertOne(doc);
@@ -454,6 +461,36 @@ router.put('/channels/:id', async (req, res) => {
     throw e;
   }
   res.json({ channel: await col('channels').findOne({ _id }) });
+});
+
+router.patch('/channels/:id/settings', async (req, res) => {
+  const _id = oid(req.params.id);
+  const source = _id && await col('channels').findOne({
+    _id,
+    userId: req.user._id,
+    role: 'source',
+  });
+  if (!source) return bad(res, 'Source channel nahi mila', 404);
+
+  const allowedSettings = ['forwardingEnabled', 'promotionEnabled', 'keepForwardTag'];
+  for (const key of allowedSettings) {
+    if (req.body[key] !== undefined && typeof req.body[key] !== 'boolean') {
+      return bad(res, `${key} must be true or false`);
+    }
+  }
+  const changedSettings = Object.fromEntries(
+    allowedSettings.filter((key) => req.body[key] !== undefined).map((key) => [key, req.body[key]]),
+  );
+  if (!Object.keys(changedSettings).length) return bad(res, 'Valid source setting nahi mili');
+
+  const settings = {
+    forwardingEnabled: source.settings?.forwardingEnabled ?? req.user.settings?.forwardingEnabled ?? true,
+    promotionEnabled: source.settings?.promotionEnabled ?? req.user.settings?.promotionEnabled ?? true,
+    keepForwardTag: source.settings?.keepForwardTag ?? req.user.settings?.keepForwardTag ?? false,
+    ...changedSettings,
+  };
+  await col('channels').updateOne({ _id, userId: req.user._id, role: 'source' }, { $set: { settings } });
+  res.json({ channel: await col('channels').findOne({ _id, userId: req.user._id }) });
 });
 
 router.delete('/channels/:id', async (req, res) => {
